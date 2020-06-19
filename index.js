@@ -137,7 +137,7 @@ async function parseCourseData() {
                         }, VIDEO_LOAD_WAIT)
                     })
 
-                    let title = (i + 1) + ' ' + lessonNode.innerText.split('\n')[0].replace(/[^a-zA-Z ]/g, "")
+                    let title = (i + 1) + '.' + lessonNode.innerText.split('\n')[0].replace(/[^a-zA-Z ]/g, "")
                     videoArray.push({ 'title': title, 'url': videoURL })
                 }
 
