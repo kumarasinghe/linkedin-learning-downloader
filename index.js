@@ -68,7 +68,7 @@ async function downloadCourses() {
         let courseURL = courseLinks[i]
         console.log(`Parsing course ${i + 1} of ${courseLinks.length}: ${courseURL}`)
         await page.goto(courseURL, { waitUntil: "networkidle2", timeout: 0 })
-        await parseCourseData()
+        if (await parseCourseData() == false) { --i }
 
     }
 
@@ -77,9 +77,21 @@ async function downloadCourses() {
 
 async function parseCourseData() {
 
-    return new Promise((resolve) => {
+    return new Promise(async (resolve) => {
 
-        page.evaluate((VIDEO_LOAD_WAIT) => {
+        // get parse resume lesson
+        let courseDir = './downloads/' + await page.evaluate(() => {
+            return document.querySelector('h1').innerText.trim().replace(/[^a-zA-Z ]/g, "")
+        })
+
+        let parseStart = 0
+        if (fs.existsSync(courseDir)) {
+            parseStart = fs.readdirSync(courseDir).length - 1
+            console.log('Resuming parsing from lesson:', parseStart)
+        }
+
+        // start parsing
+        page.evaluate((parseStart, VIDEO_LOAD_WAIT) => {
 
             return new Promise(async (resolve) => {
 
@@ -95,7 +107,8 @@ async function parseCourseData() {
 
                 // click each lesson node and grab the video source
                 let videoArray = []
-                for (let i = 0; i < lessonNodes.length; ++i) {
+
+                for (let i = parseStart; i < lessonNodes.length; ++i) {
 
                     console.log(`Parsing video ${(i + 1)} of ${lessonNodes.length}...`)
                     let lessonNode = lessonNodes[i]
@@ -105,19 +118,30 @@ async function parseCourseData() {
                     // wait and get video URL
                     let videoURL = await new Promise(resolve => {
                         let interval = setInterval(() => {
+
                             let player = document.querySelector('video')
                             if (player && player.src && !player.src.includes('0123456789')) {
                                 clearInterval(interval)
                                 resolve(player.src)
                                 player.src = '0123456789'	// mark dirty
                             }
+
+                            // click retry if player crashed. will throw and error restart the downlaod
+                            let buttons = document.querySelectorAll('button')
+                            buttons.forEach((button) => {
+                                if (button.innerText == 'Try again') {
+                                    throw new Error('Player failure')
+                                }
+                            })
+
                         }, VIDEO_LOAD_WAIT)
                     })
 
-                    let title = lessonNode.innerText.split('\n')[0].replace(/[^a-zA-Z ]/g, "")
+                    let title = (i + 1) + ' ' + lessonNode.innerText.split('\n')[0].replace(/[^a-zA-Z ]/g, "")
                     videoArray.push({ 'title': title, 'url': videoURL })
                 }
 
+                // get course title
                 let courseTitle = document.querySelector('h1').innerText.trim().replace(/[^a-zA-Z ]/g, "")
 
                 resolve({ "courseTitle": courseTitle, "videoURLArray": videoArray })
@@ -126,13 +150,13 @@ async function parseCourseData() {
 
             })
 
-        }, config.videoLoadWait)
+        }, parseStart, config.videoLoadWait)
 
             .then(async (courseData) => {
                 await downloadVideos(courseData)
                 resolve()
             })
-            .catch((err) => { })
+            .catch((err) => { resolve(false) })
 
     })
 
@@ -150,13 +174,7 @@ async function downloadVideos(courseData) {
 
         for (let i = 0; i < videoURLArray.length; ++i) {
             let videoData = videoURLArray[i]
-            let outFilePath = `${downloadDir}/${i + 1}.${videoData.title}.mp4`
-
-            // skip downloading if file exists
-            if (fs.existsSync(outFilePath)) {
-                console.log(`Skipping downloading: ${videoData.title}.mp4`)
-                continue
-            }
+            let outFilePath = `${downloadDir}/${videoData.title}.mp4`
 
             console.log(`Downloading lesson ${i + 1} of ${videoURLArray.length} : ${videoData.title}`)
 
