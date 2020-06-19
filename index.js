@@ -25,7 +25,11 @@ let courseLinks, browser, page;
         "headless": false,
         "defaultViewport": null,
         "executablePath": config.chromeExecutablePath,
-        "userDataDir": './chrome-session'
+        "userDataDir": './chrome-session',
+        args: [
+            '--disable-web-security',
+            '--auto-open-devtools-for-tabs'
+        ]
     })
 
     // get first tab
@@ -68,30 +72,20 @@ async function downloadCourses() {
         let courseURL = courseLinks[i]
         console.log(`Parsing course ${i + 1} of ${courseLinks.length}: ${courseURL}`)
         await page.goto(courseURL, { waitUntil: "networkidle2", timeout: 0 })
-        if (await parseCourseData() == false) { --i }
+        if (await downloadCurrentCourse() == false) { --i }
 
     }
 
 }
 
 
-async function parseCourseData() {
+async function downloadCurrentCourse() {
 
     return new Promise(async (resolve) => {
 
-        // get parse resume lesson
-        let courseDir = './downloads/' + await page.evaluate(() => {
-            return document.querySelector('h1').innerText.trim().replace(/[^a-zA-Z ]/g, "")
-        })
-
-        let parseStart = 0
-        if (fs.existsSync(courseDir)) {
-            parseStart = fs.readdirSync(courseDir).length
-            console.log('Resuming parsing from lesson:', parseStart--)
-        }
 
         // start parsing
-        page.evaluate((parseStart, VIDEO_LOAD_WAIT) => {
+        page.evaluate((VIDEO_LOAD_WAIT) => {
 
             return new Promise(async (resolve) => {
 
@@ -105,10 +99,11 @@ async function parseCourseData() {
                 // get lesson nodes
                 let lessonNodes = document.querySelectorAll(SELECTOR_LESSONS)
 
-                // click each lesson node and grab the video source
-                let videoArray = []
+                // get course title
+                let courseTitle = document.querySelector('h1').innerText.trim().replace(/[^a-zA-Z ]/g, "")
 
-                for (let i = parseStart; i < lessonNodes.length; ++i) {
+                // click each lesson node and grab the video source
+                for (let i = 0; i < lessonNodes.length; ++i) {
 
                     console.log(`Parsing video ${(i + 1)} of ${lessonNodes.length}...`)
                     let lessonNode = lessonNodes[i]
@@ -137,68 +132,30 @@ async function parseCourseData() {
                         }, VIDEO_LOAD_WAIT)
                     })
 
-                    let title = (i + 1) + '.' + lessonNode.innerText.split('\n')[0].replace(/[^a-zA-Z ]/g, "")
-                    videoArray.push({ 'title': title, 'url': videoURL })
+                    let filename = courseTitle + ' - ' + (i + 1) + ' - ' + lessonNode.innerText.split('\n')[0].replace(/[^a-zA-Z ]/g, "") + '.mp4'
+                    console.log(`Downloading ${filename}...`)
+
+                    let res = await fetch(videoURL, {credentials: 'include'})
+                    let blob = await res.blob()
+                    let a = document.createElement("a")
+                    a.href = URL.createObjectURL(blob)
+                    a.download = filename
+                    a.click()
+
                 }
 
-                // get course title
-                let courseTitle = document.querySelector('h1').innerText.trim().replace(/[^a-zA-Z ]/g, "")
-
-                resolve({ "courseTitle": courseTitle, "videoURLArray": videoArray })
-
-                document.write('<h3>See terminal for download progress...</h3>')
+                console.log(`Finished downloading ${courseTitle}!`)
+                resolve()
 
             })
 
-        }, parseStart, config.videoLoadWait)
+        }, config.videoLoadWait)
 
-            .then(async (courseData) => {
-                await downloadVideos(courseData)
+            .then(async () => {
                 resolve()
             })
             .catch((err) => { resolve(false) })
 
     })
 
-}
-
-
-async function downloadVideos(courseData) {
-
-    console.log('Downlaoding course :', courseData.courseTitle)
-    let downloadDir = `./downloads/${courseData.courseTitle}`
-    fs.existsSync(downloadDir) || fs.mkdirSync(downloadDir)
-    let videoURLArray = courseData.videoURLArray
-
-    return new Promise(async (resolve) => {
-
-        for (let i = 0; i < videoURLArray.length; ++i) {
-            let videoData = videoURLArray[i]
-            let outFilePath = `${downloadDir}/${videoData.title}.mp4`
-
-            console.log(`Downloading lesson ${i + 1} of ${videoURLArray.length} : ${videoData.title}`)
-
-            await downloadFile(
-                videoData.url.replace('https', 'http'),
-                outFilePath
-            )
-        }
-
-        resolve()
-
-    })
-
-}
-
-
-async function downloadFile(url, path) {
-
-    const res = await fetch(url)
-    const fileStream = fs.createWriteStream(path)
-
-    await new Promise((resolve) => {
-        res.body.pipe(fileStream)
-        res.body.on("error", (err) => { console.log(err) })
-        fileStream.on("finish", function () { resolve() })
-    })
 }
