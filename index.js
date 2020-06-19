@@ -86,7 +86,7 @@ async function parseCourseData() {
 
         let parseStart = 0
         if (fs.existsSync(courseDir)) {
-            parseStart = fs.readdirSync(courseDir).length - 1
+            parseStart = fs.readdirSync(courseDir).length
             console.log('Resuming parsing from lesson:', parseStart)
         }
 
