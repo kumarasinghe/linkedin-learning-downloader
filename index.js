@@ -3,7 +3,10 @@ const puppeteer = require('puppeteer-core');
 const fs = require('fs');
 const fetch = require("node-fetch");
 const config = require('./config');
+var path = require("path");
+const DOWNLOAD_DIR = path.join(__dirname, 'downloads')
 let courseLinks, browser, page;
+
 
 // main
 (async () => {
@@ -18,7 +21,8 @@ let courseLinks, browser, page;
     console.log(`Found ${courseLinks.length} courses.`)
 
     // create download dir
-    fs.existsSync('downloads') || fs.mkdirSync('downloads')
+    fs.existsSync(DOWNLOAD_DIR) || fs.mkdirSync(DOWNLOAD_DIR)
+    console.log(`Download directory:${DOWNLOAD_DIR}`)
 
     // start chrome
     browser = await puppeteer.launch({
@@ -35,7 +39,7 @@ let courseLinks, browser, page;
     // get first tab
     page = (await browser.pages())[0]
 
-    // inject keyboard shortcut on every page relaod
+    // attach download button
     page.on('domcontentloaded', () => {
 
         page.evaluate(() => {
@@ -72,20 +76,49 @@ async function downloadCourses() {
         let courseURL = courseLinks[i]
         console.log(`Parsing course ${i + 1} of ${courseLinks.length}: ${courseURL}`)
         await page.goto(courseURL, { waitUntil: "networkidle2", timeout: 0 })
-        if (await downloadCurrentCourse() == false) { --i }
+        await page._client.send('Page.setDownloadBehavior', { behavior: 'allow', downloadPath: DOWNLOAD_DIR }) // set download dir
+
+        // calculate resume position
+        let downloadedFileCount = fs.readdirSync(DOWNLOAD_DIR).filter(fn => fn.endsWith('.mp4')).length
+        if(downloadedFileCount){ 
+            console.log(`Resuming download from lesson ${downloadedFileCount}...`)
+            --downloadedFileCount
+        }
+
+        let downloadStats = await downloadCurrentCourse(downloadedFileCount)
+
+        if (downloadStats.isComplete) {
+            console.log('Course downloaded successfully!\nMoving files...')
+            // move files
+            let COURSE_DIR = path.join(DOWNLOAD_DIR, downloadStats.courseTitle)
+            fs.existsSync(COURSE_DIR) || fs.mkdirSync(COURSE_DIR)
+
+            let downloadFileList = fs.readdirSync(DOWNLOAD_DIR).filter(fn => fn.endsWith('.mp4'))
+            downloadFileList.forEach((filename) => {
+                moveIntoDir(filename, `${COURSE_DIR}/${baseName}`)
+            })
+
+        }
+        else {
+            console.error('Course downloading unsuccessful! Retrying...')
+            --i
+        }
 
     }
+
+    console.log('Program ended.')
 
 }
 
 
-async function downloadCurrentCourse() {
+async function downloadCurrentCourse(startLesson) {
 
     return new Promise(async (resolve) => {
 
-
         // start parsing
-        page.evaluate((VIDEO_LOAD_WAIT) => {
+        let courseTitle = await page.evaluate((startLesson, VIDEO_LOAD_WAIT) => {
+
+            if(startLesson)(`Resuming download from lesson ${startLesson + 1}...`)
 
             return new Promise(async (resolve) => {
 
@@ -99,13 +132,10 @@ async function downloadCurrentCourse() {
                 // get lesson nodes
                 let lessonNodes = document.querySelectorAll(SELECTOR_LESSONS)
 
-                // get course title
-                let courseTitle = document.querySelector('h1').innerText.trim().replace(/[^a-zA-Z ]/g, "")
-
                 // click each lesson node and grab the video source
-                for (let i = 0; i < lessonNodes.length; ++i) {
+                for (let i = startLesson; i < lessonNodes.length; ++i) {
 
-                    console.log(`Parsing video ${(i + 1)} of ${lessonNodes.length}...`)
+                    console.log(`Parsing lesson ${(i + 1)}/${lessonNodes.length}...`)
                     let lessonNode = lessonNodes[i]
                     if (lessonNode.innerText.toLowerCase().includes('quiz')) { continue } // skip quizes
                     lessonNode.click()	// play lesson
@@ -121,21 +151,31 @@ async function downloadCurrentCourse() {
                                 player.src = '0123456789'	// mark dirty
                             }
 
-                            // click retry if player crashed. will throw and error restart the downlaod
+                            // player crashed
                             let buttons = document.querySelectorAll('button')
                             buttons.forEach((button) => {
-                                if (button.innerText == 'Try again') {
-                                    throw new Error('Player failure')
+                                if (button.innerText.includes('Try again')) {
+                                    resolve()
                                 }
                             })
 
                         }, VIDEO_LOAD_WAIT)
                     })
 
-                    let filename = courseTitle + ' - ' + (i + 1) + ' - ' + lessonNode.innerText.split('\n')[0].replace(/[^a-zA-Z ]/g, "") + '.mp4'
-                    console.log(`Downloading ${filename}...`)
 
-                    let res = await fetch(videoURL, {credentials: 'include'})
+                    let courseTitle = document.querySelector('h1').innerText.trim().replace(/[^a-zA-Z ]/g, "")
+
+                    // player crashed
+                    if (!videoURL) {
+                        resolve()
+                        return
+                    }
+
+                    // download file through browser
+                    let filename = courseTitle + ' - ' + (i + 1) + ' - ' + lessonNode.innerText.split('\n')[0].replace(/[^a-zA-Z ]/g, "") + '.mp4'
+                    console.log(`Downloading:\n${filename}`)
+
+                    let res = await fetch(videoURL, { credentials: 'include' })
                     let blob = await res.blob()
                     let a = document.createElement("a")
                     a.href = URL.createObjectURL(blob)
@@ -145,17 +185,30 @@ async function downloadCurrentCourse() {
                 }
 
                 console.log(`Finished downloading ${courseTitle}!`)
-                resolve()
+                resolve(courseTitle)
 
             })
 
-        }, config.videoLoadWait)
+        }, startLesson, config.videoLoadWait)
 
-            .then(async () => {
-                resolve()
-            })
-            .catch((err) => { resolve(false) })
+
+        // download success
+        if (courseTitle) {
+            resolve({ isComplete: true, courseTitle: courseTitle })
+        }
+        // download fail
+        else {
+            resolve({ isComplete: false, courseTitle: courseTitle })
+        }
 
     })
+
+}
+
+
+function moveIntoDir(filename, dir) {
+
+    let baseName = path.basename(filename)
+    fs.renameSync(filename, `${dir}/${baseName}`)
 
 }
