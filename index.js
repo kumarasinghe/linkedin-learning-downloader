@@ -1,4 +1,8 @@
-// author: Naveen Kumarasinghe <dndkumarasinghe@gmail.com
+/*
+ author: Naveen Kumarasinghe <dndkumarasinghe@gmail.com>
+ license: MIT
+ */
+
 const puppeteer = require('puppeteer-core');
 const fs = require('fs');
 const fetch = require("node-fetch");
@@ -17,12 +21,11 @@ let courseLinks, browser, page;
         return
     }
 
-    courseLinks = courseLinks.split('\n')
-    console.log(`Found ${courseLinks.length} courses.`)
-
-    // create download dir
-    fs.existsSync(DOWNLOAD_DIR) || fs.mkdirSync(DOWNLOAD_DIR)
-    console.log(`Download directory:${DOWNLOAD_DIR}`)
+    // check chrome
+    if (!fs.existsSync(config.chromeExecutablePath)) {
+        console.error('You need to specify a valid "chromeExecutablePath" in config.js')
+        return
+    }
 
     // start chrome
     browser = await puppeteer.launch({
@@ -31,10 +34,16 @@ let courseLinks, browser, page;
         "executablePath": config.chromeExecutablePath,
         "userDataDir": './chrome-session',
         args: [
-            '--disable-web-security',
-            '--auto-open-devtools-for-tabs'
+            '--disable-web-security'
         ]
     })
+
+    courseLinks = courseLinks.split('\n')
+    console.log(`Detected ${courseLinks.length} courses.`)
+
+    // create download dir
+    fs.existsSync(DOWNLOAD_DIR) || fs.mkdirSync(DOWNLOAD_DIR)
+    console.log(`Download directory:${DOWNLOAD_DIR}`)
 
     // get first tab
     page = (await browser.pages())[0]
@@ -66,10 +75,12 @@ let courseLinks, browser, page;
         alert('Sign in first, and click the Download button top right side.')
     })
 
+
 })()
 
 
 async function downloadCourses() {
+
 
     for (let i = 0; i < courseLinks.length; ++i) {
 
@@ -80,7 +91,7 @@ async function downloadCourses() {
 
         // calculate resume position
         let downloadedFileCount = fs.readdirSync(DOWNLOAD_DIR).filter(fn => fn.endsWith('.mp4')).length
-        if(downloadedFileCount){ 
+        if (downloadedFileCount) {
             console.log(`Resuming download from lesson ${downloadedFileCount}...`)
             --downloadedFileCount
         }
@@ -89,13 +100,14 @@ async function downloadCourses() {
 
         if (downloadStats.isComplete) {
             console.log('Course downloaded successfully!\nMoving files...')
+
             // move files
             let COURSE_DIR = path.join(DOWNLOAD_DIR, downloadStats.courseTitle)
             fs.existsSync(COURSE_DIR) || fs.mkdirSync(COURSE_DIR)
 
             let downloadFileList = fs.readdirSync(DOWNLOAD_DIR).filter(fn => fn.endsWith('.mp4'))
             downloadFileList.forEach((filename) => {
-                moveIntoDir(filename, `${COURSE_DIR}/${baseName}`)
+                moveIntoDir(path.join(DOWNLOAD_DIR, filename), COURSE_DIR)
             })
 
         }
@@ -108,17 +120,25 @@ async function downloadCourses() {
 
     console.log('Program ended.')
 
+
 }
 
 
 async function downloadCurrentCourse(startLesson) {
+
 
     return new Promise(async (resolve) => {
 
         // start parsing
         let courseTitle = await page.evaluate((startLesson, VIDEO_LOAD_WAIT) => {
 
-            if(startLesson)(`Resuming download from lesson ${startLesson + 1}...`)
+            let ticker = document.createElement('div')
+            ticker.innerText = 'Downloading course list...'
+            ticker.style = 'position:absolute; z-index:10000; background-color:orange; color:white; padding: 10px;'
+            document.body.prepend(ticker)
+
+            if (startLesson) (ticker.innerText = `Resuming download from lesson ${startLesson + 1}...`)
+            let courseTitle = 'LinkedIn - ' + document.querySelector('h1').innerText.trim().replace(/[^a-zA-Z ]/g, "")
 
             return new Promise(async (resolve) => {
 
@@ -135,7 +155,7 @@ async function downloadCurrentCourse(startLesson) {
                 // click each lesson node and grab the video source
                 for (let i = startLesson; i < lessonNodes.length; ++i) {
 
-                    console.log(`Parsing lesson ${(i + 1)}/${lessonNodes.length}...`)
+                    ticker.innerText = `Parsing lesson ${(i + 1)}/${lessonNodes.length}...`
                     let lessonNode = lessonNodes[i]
                     if (lessonNode.innerText.toLowerCase().includes('quiz')) { continue } // skip quizes
                     lessonNode.click()	// play lesson
@@ -155,15 +175,13 @@ async function downloadCurrentCourse(startLesson) {
                             let buttons = document.querySelectorAll('button')
                             buttons.forEach((button) => {
                                 if (button.innerText.includes('Try again')) {
+                                    ticker.innerText = `Player crashed! Restarting download...`
                                     resolve()
                                 }
                             })
 
                         }, VIDEO_LOAD_WAIT)
                     })
-
-
-                    let courseTitle = document.querySelector('h1').innerText.trim().replace(/[^a-zA-Z ]/g, "")
 
                     // player crashed
                     if (!videoURL) {
@@ -172,8 +190,8 @@ async function downloadCurrentCourse(startLesson) {
                     }
 
                     // download file through browser
-                    let filename = courseTitle + ' - ' + (i + 1) + ' - ' + lessonNode.innerText.split('\n')[0].replace(/[^a-zA-Z ]/g, "") + '.mp4'
-                    console.log(`Downloading:\n${filename}`)
+                    let filename = (i + 1) + '. ' + lessonNode.innerText.split('\n')[0].replace(/[^a-zA-Z ]/g, "") + '.mp4'
+                    ticker.innerText = `Downloading lesson (${i + 1}/${lessonNodes.length})...\n${filename}`
 
                     let res = await fetch(videoURL, { credentials: 'include' })
                     let blob = await res.blob()
@@ -184,7 +202,8 @@ async function downloadCurrentCourse(startLesson) {
 
                 }
 
-                console.log(`Finished downloading ${courseTitle}!`)
+                await new Promise(resolve => setTimeout(resolve, 3000))
+                ticker.innerText = `Preparing to download the next course...`
                 resolve(courseTitle)
 
             })
@@ -203,12 +222,15 @@ async function downloadCurrentCourse(startLesson) {
 
     })
 
+
 }
 
 
 function moveIntoDir(filename, dir) {
 
+
     let baseName = path.basename(filename)
     fs.renameSync(filename, `${dir}/${baseName}`)
+
 
 }
