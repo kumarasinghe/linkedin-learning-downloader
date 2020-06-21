@@ -85,6 +85,8 @@ async function downloadCourses() {
     for (let i = 0; i < courseLinks.length; ++i) {
 
         let courseURL = courseLinks[i]
+        if (courseURL.startsWith('#')) { continue }
+
         console.log(`Parsing course ${i + 1} of ${courseLinks.length}: ${courseURL}`)
         await page.goto(courseURL, { waitUntil: "networkidle2", timeout: 0 })
         await page._client.send('Page.setDownloadBehavior', { behavior: 'allow', downloadPath: DOWNLOAD_DIR }) // set download dir
@@ -109,6 +111,10 @@ async function downloadCourses() {
             downloadFileList.forEach((filename) => {
                 moveIntoDir(path.join(DOWNLOAD_DIR, filename), COURSE_DIR)
             })
+
+            // update couse link file
+            courseLinks[i] = '#' + courseLinks[i]   // mark course as downloaded
+            fs.writeFileSync('./courselinks.txt', courseLinks.join('\n'))
 
         }
         else {

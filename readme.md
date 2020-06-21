@@ -15,4 +15,4 @@ Add course links you need to download to `courselinks.txt`
 
 Start program with:
 
-> npm start
+    npm start
